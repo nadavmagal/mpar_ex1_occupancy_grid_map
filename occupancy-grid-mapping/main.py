@@ -18,7 +18,7 @@ def get_kitti_dataset():
 
     # Specify the dataset to load
     date = '2011_09_26'
-    drive = '0093'
+    drive = '0005'
 
     # Load the data. Optionally, specify the frame range to load.
     # dataset = pykitti.raw(basedir, date, drive)
@@ -46,7 +46,7 @@ if __name__ == "__main__":
         velo_pt = veh_pt + velo_pt
 
         env_map.set_vehicle_pose(veh_pt)
-        plot2D_scatter(velo_pt, veh_pt)
+        # plot2D_scatter(velo_pt, veh_pt)
 
         print("Processing point cloud data... \n")
         for pt in velo_pt[::50]:

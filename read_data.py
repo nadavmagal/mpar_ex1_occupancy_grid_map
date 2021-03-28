@@ -13,7 +13,7 @@ def read_kitti_data(basedir, date, drive):
 def main():
     basedir = r'/home/nadav/studies/mapping_and_perception_autonomous_robots/first_project/organized_data'
     date = '2011_09_26'
-    drive = '0093'
+    drive = '0005'
 
     # The 'frames' argument is optional - default: None, which loads the whole dataset.
     # Calibration, timestamps, and IMU data are read automatically.
