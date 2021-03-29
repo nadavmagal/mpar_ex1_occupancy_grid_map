@@ -5,10 +5,13 @@ import numpy as np
 from tqdm import trange, tqdm
 import time
 import os
+import copy
 
-DEBUG = False
-debug_velo_scatter_fig = plt.figure() if DEBUG else None
-debug_velo_grid_fig = plt.figure() if DEBUG else None
+DEBUG_SAVE_FIG = True
+DEBUG_SHOW = False
+debug_velo_scatter_fig = plt.figure() if DEBUG_SHOW else None
+debug_inverse_fig = plt.figure() if DEBUG_SHOW else None
+debug_velo_grid_fig = plt.figure(figsize=[15, 10], dpi=500) if DEBUG_SAVE_FIG else None
 Z_MAX_M = 30
 
 
@@ -37,23 +40,28 @@ class OccupancyMap:
         self.log_free_th = prob_to_logit(0.2)
         self.z_max = Z_MAX_M
         self.num_min_pillar_hits = 1  # TODO: change to 1
+        self.min_delta_degree = 5
 
         self.debug_accumulate_velo_grid = np.zeros_like(self.log_odds_prob)
 
-    def update_map_from_velo(self, cur_car_w_coor_m, cur_velo_w_coor_m):
+    def update_map_from_velo(self, cur_car_w_coor_m, cur_velo_w_coor_m, result_dir_timed, ii):
 
         cur_car_grid_coor = cur_car_w_coor_m / self.resolution
         cur_velo_grid_coor = cur_velo_w_coor_m / self.resolution
 
-        velo_grid_map = self._velo_point_cloude_to_map(cur_velo_grid_coor)
+        velo_grid_map = self._velo_point_cloude_to_map(cur_velo_grid_coor, result_dir_timed, ii)
 
-        for xx in trange(np.shape(self.log_odds_prob)[0]):
-            for yy in range(np.shape(self.log_odds_prob)[1]):
+        xx_range = range(int(cur_car_grid_coor[0] - self.z_max/self.resolution), int(cur_car_grid_coor[0] + self.z_max/self.resolution))
+        yy_range = range(int(cur_car_grid_coor[1] - self.z_max/self.resolution), int(cur_car_grid_coor[1] + self.z_max/self.resolution))
+        for xx in tqdm(xx_range):
+            for yy in yy_range:
+                if xx < 0 or xx > self.log_odds_prob.shape[0] or yy < 0 or yy > self.log_odds_prob.shape[1]:
+                    continue
                 self.log_odds_prob[xx, yy] += self._inverse_range_sensor_model([xx, yy], cur_car_grid_coor,
                                                                                velo_grid_map)
         self._saturate_values()
 
-        if DEBUG:
+        if DEBUG_SAVE_FIG:
             plt.figure()
             plt.imshow(self.log_odds_prob)
             plt.show(block=False)
@@ -64,7 +72,7 @@ class OccupancyMap:
         self.log_odds_prob = np.where(self.log_odds_prob < self.log_saturation_min, self.log_saturation_min,
                                       self.log_odds_prob)
 
-    def _velo_point_cloude_to_map(self, cur_velo_grid_coor):
+    def _velo_point_cloude_to_map(self, cur_velo_grid_coor, result_dir_timed, ii):
         velo_grid = np.zeros_like(self.debug_accumulate_velo_grid)
         for cur_velo in cur_velo_grid_coor:
             x = int(round(cur_velo[0]))
@@ -75,7 +83,7 @@ class OccupancyMap:
 
         velo_grid = np.where(velo_grid > self.num_min_pillar_hits, 1, 0)
 
-        if DEBUG:
+        if DEBUG_SAVE_FIG:
             plt.figure(debug_velo_grid_fig)
             plt.subplot(1, 2, 1)
             plt.title('cur velo_grid')
@@ -83,7 +91,8 @@ class OccupancyMap:
             plt.subplot(1, 2, 2)
             plt.imshow(self.debug_accumulate_velo_grid)
             plt.title('accumulate velo grid')
-            plt.show(block=False)
+            plt.savefig(os.path.join(result_dir_timed, f'debug_accumulate_velo_grid_{ii}.png'))
+            # plt.show(block=False)
         return velo_grid
 
     def _get_index_of_closest_angular_velo_coord(self, phi_deg, cur_velo_grid_coor, cur_car_grid_coor_2D):
@@ -108,6 +117,29 @@ class OccupancyMap:
                 index_of_min_delta = cur_velo
         return index_of_min_delta
 
+    def _get_index_of_closest_angular_velo_map_at_farther_distance(self, phi_deg, velo_grid_map, cur_car_grid_coor_2D):
+        delta_angle_vec = []
+        coord_of_min_delta_angle = []
+        for cur_velo in np.argwhere(velo_grid_map > 0):
+            theta_cur_velo = np.rad2deg(
+                np.arctan2(cur_car_grid_coor_2D[1] - cur_velo[0], cur_car_grid_coor_2D[0] - cur_velo[1]))
+            if DEBUG_SHOW:
+                plt.figure(debug_inverse_fig)
+                plt.scatter(cur_velo[1], cur_velo[0], marker='x', color='green')
+
+            if abs(theta_cur_velo - phi_deg) < self.min_delta_degree:
+                delta_angle_vec.append(abs(theta_cur_velo))
+                coord_of_min_delta_angle.append(cur_velo)
+
+        index_of_min_delta = None
+        max_r = 0
+        for cur_velo in coord_of_min_delta_angle:
+            cur_r = np.linalg.norm(cur_velo - cur_car_grid_coor_2D)
+            if cur_r < 30 / self.resolution and cur_r > max_r:
+                max_r = cur_r
+                index_of_min_delta = cur_velo
+
+        return index_of_min_delta
 
     def _inverse_range_sensor_model(self, cur_cell_2D, cur_car_grid_coor, velo_grid_map):
         cur_car_grid_coor_2D = np.array([cur_car_grid_coor[0], cur_car_grid_coor[1]])
@@ -115,8 +147,21 @@ class OccupancyMap:
         r_cell_m = np.linalg.norm(cur_car_grid_coor_2D - cur_cell_2D) * self.resolution
         phi_deg = np.rad2deg(
             np.arctan2(cur_car_grid_coor_2D[1] - cur_cell_2D[1], cur_car_grid_coor_2D[0] - cur_cell_2D[0]))
+
+        if DEBUG_SHOW:
+            plt.figure(debug_inverse_fig)
+            plt.imshow(velo_grid_map)
+            plt.scatter(cur_cell_2D[0], cur_cell_2D[1], marker='x', color='red', label='cell')
+            plt.scatter(cur_car_grid_coor[0], cur_car_grid_coor[1], color='blue', label='car')
+            plt.plot([cur_cell_2D[0], cur_car_grid_coor[0]], [cur_cell_2D[1], cur_car_grid_coor[1]], color='orange')
+            plt.title(f'phi={round(phi_deg, 2)} deg')
+            plt.legend()
+            plt.show(block=False)
+
         # closest_velo = self._get_index_of_closest_angular_velo_coord(phi_deg, cur_velo_grid_coor, cur_car_grid_coor_2D)
-        closest_velo = self._get_index_of_closest_angular_velo_map(phi_deg, velo_grid_map, cur_car_grid_coor_2D)
+        # closest_velo = self._get_index_of_closest_angular_velo_map(phi_deg, velo_grid_map, cur_car_grid_coor_2D)
+        closest_velo = self._get_index_of_closest_angular_velo_map_at_farther_distance(phi_deg, velo_grid_map,
+                                                                                       cur_car_grid_coor_2D)
 
         r_z_k_m = np.linalg.norm(cur_car_grid_coor_2D - closest_velo[0:2]) * self.resolution
 
@@ -144,8 +189,8 @@ def plot_figure(cur_cam2, cur_occupancy_map, cur_velo_car_coor_m, cur_figure, ii
     resolution = 0.2
     velo_grid = np.zeros([int(70 / resolution), int(70 / resolution)])
     for cur_velo in cur_velo_car_coor_m:
-        x = int(round(cur_velo[0]/resolution) + velo_grid.shape[0]/2)
-        y = int(round(cur_velo[1]/resolution) + velo_grid.shape[0]/2)
+        x = int(round(cur_velo[0] / resolution) + velo_grid.shape[0] / 2)
+        y = int(round(cur_velo[1] / resolution) + velo_grid.shape[0] / 2)
         if x < velo_grid.shape[0] and y < velo_grid.shape[1]:
             velo_grid[x, y] += 1
     plt.imshow(velo_grid)
@@ -153,7 +198,7 @@ def plot_figure(cur_cam2, cur_occupancy_map, cur_velo_car_coor_m, cur_figure, ii
     plt.subplot(2, 2, 4)
     plt.imshow(cur_occupancy_map)
 
-    plt.savefig(os.path.join(result_dir_timed, f'{ii}.png'))
+    plt.savefig(os.path.join(result_dir_timed, f'occ_map_{ii}.png'))
     # plt.close('all')
     # plt.show(block=False)
 
@@ -211,10 +256,10 @@ def create_occupancy_map(basedir, date, dataset_number, x_size_m, y_size_m, reso
 
         cur_velo_w_coor_m = velo_to_ned_coord(cur_oxts, clipped_cur_velo_car_coor_m, cur_car_w_coor_m)
 
-        if DEBUG:
+        if DEBUG_SHOW:
             plot_car_and_velo_coordinates(debug_velo_scatter_fig, cur_car_w_coor_m, cur_velo_w_coor_m)
 
-        map.update_map_from_velo(cur_car_w_coor_m, cur_velo_w_coor_m)
+        map.update_map_from_velo(cur_car_w_coor_m, cur_velo_w_coor_m, result_dir_timed, ii)
         cur_occupancy_map = map.get_occupancy_map()
 
         plot_figure(cur_cam2, cur_occupancy_map, cur_velo_car_coor_m, cur_figure, ii, result_dir_timed)
@@ -234,11 +279,11 @@ if __name__ == "__main__":
     result_dir = r'/home/nadav/studies/mapping_and_perception_autonomous_robots/first_project/results'
     cur_date_time = time.strftime("%Y.%m.%d-%H.%M")
     result_dir_timed = os.path.join(result_dir, cur_date_time)
+    print(f'saving to: {result_dir_timed}')
     os.makedirs(result_dir_timed, exist_ok=True)
 
     skip_frames = 2  # TODO: in advanced frame number we need to enlarge the y_size,x_size
-    skip_velo = 50
-    start_frame = 29
+    skip_velo = 10
 
     x_size_m = 100
     y_size_m = 100
