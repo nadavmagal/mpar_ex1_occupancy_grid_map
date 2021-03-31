@@ -68,7 +68,11 @@ def main():
     # cmap = 'spring'
     colors = np.arange(len(data.oxts)-1, -1, -1)
     ax.scatter(point_w[:, 0], point_w[:, 1], point_w[:, 2], c=colors, cmap=cmap)
-    plt.show()
+    plt.show(block=False)
+
+    plt.figure()
+    plt.scatter(point_w[:, 0], point_w[:, 1], c=colors, cmap=cmap)
+    plt.show(block=False)
     a=3
 
     for ii, cur_velo in enumerate(data.velo):
