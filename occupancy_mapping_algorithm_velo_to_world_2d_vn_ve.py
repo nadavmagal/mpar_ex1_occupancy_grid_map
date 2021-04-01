@@ -385,10 +385,38 @@ def create_occupancy_map(basedir, date, dataset_number, x_size_m, y_size_m, reso
     center_offset_m = int(x_size_m / 2)
 
     car_w_coordinates_m = [o.T_w_imu.dot(point_imu) + center_offset_m for o in oxts]
+    car_w_coordinates_m_arr = np.array(car_w_coordinates_m)
+
+    vn = np.array([o.packet.vn  for o in oxts])
+    ve = np.array([o.packet.ve  for o in oxts])
+    time_diff_sec = np.array([cur.microseconds*1e-6 for cur in np.array(data.timestamps[1::]) - np.array(data.timestamps[:-1:])])
+
+    delta_vn_m = np.multiply(vn[1::], time_diff_sec)
+    delta_ve_m = np.multiply(ve[1::], time_diff_sec)
+
+    vn_total = np.cumsum(delta_vn_m) + center_offset_m
+    ve_total = np.cumsum(delta_ve_m)+ center_offset_m
+
+    car_w_coordinates_m_ve_vn = [np.array([cur_ve, cur_vn]) for cur_ve, cur_vn in zip(ve_total, vn_total)]
+    a=2
+    if False:
+        plt.figure()
+        plt.subplot(1,2,1)
+        plt.scatter(car_w_coordinates_m_arr[:,0], car_w_coordinates_m_arr[:,1])
+        plt.text(car_w_coordinates_m_arr[0,0], car_w_coordinates_m_arr[0,1], '1')
+        plt.text(car_w_coordinates_m_arr[-1,0], car_w_coordinates_m_arr[-1,1], 'end')
+        plt.subplot(1,2,2)
+        plt.scatter(ve_total, vn_total)
+        plt.text(ve_total[0], vn_total[0], '1')
+        plt.text(ve_total[-1], vn_total[-1], 'end')
+        plt.show(block=False)
+
+
+
     accumulate_car_coor_m = []
     results_fig = plt.figure(figsize=[15, 10], dpi=300)
-    for ii, cur_velo_car_coor_m, cur_car_w_coor_m, cur_cam2, cur_oxts in zip(range(len(car_w_coordinates_m)), velo,
-                                                                             car_w_coordinates_m, cam2, oxts):
+    for ii, cur_velo_car_coor_m, cur_car_w_coor_m, cur_cam2, cur_oxts in zip(range(len(car_w_coordinates_m_ve_vn)), velo,
+                                                                             car_w_coordinates_m_ve_vn, cam2, oxts):
         if ii < start_frame:
             continue
 
@@ -450,10 +478,10 @@ if __name__ == "__main__":
     occ_params = {
         'p_hit': 0.7, # default 0.7
         'p_miss': 0.4, # default 0.4
-        'occ_th': 0.9, # default 0.8
-        'free_th': 0.6} # default 0.2 # TODO - change 0.75!!!
+        'occ_th': 0.8, # default 0.8
+        'free_th': 0.2} # default 0.2
 
-    result_dir_timed = os.path.join(result_dir, f'{cur_date_time}_{dataset_number}_skipvelo_{skip_velo}_{occ_params}')
+    result_dir_timed = os.path.join(result_dir, f'{cur_date_time}_{dataset_number}_skipvelo_{skip_velo}_{occ_params}_ve_vn')
     print(f'saving to: {result_dir_timed}')
     os.makedirs(result_dir_timed, exist_ok=True)
     create_occupancy_map(basedir, date, dataset_number, x_size_m, y_size_m, resolution_cell_m, skip_frames, skip_velo,
