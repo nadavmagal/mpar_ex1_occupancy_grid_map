@@ -354,7 +354,7 @@ def apply_icp(fixed_point_cloud, moving_point_cloud):
     kd_tree = KDTree(fixed_point_cloud)
     n = np.size(moving_point_cloud, 0)
     cur_error = np.inf
-    for i in range(1):  # TODO remove iteration
+    for i in range(1):
         prev_error = cur_error
         distance, indices = kd_tree.query(moving_point_cloud)
         cur_error = np.mean(distance ** 2)
