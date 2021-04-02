@@ -15,7 +15,7 @@ debug_velo_scatter_fig = plt.figure() if DEBUG_SHOW else None
 debug_inverse_fig = plt.figure() if DEBUG_SHOW else None
 debug_velo_grid_fig = plt.figure(figsize=[15, 10], dpi=500) if DEBUG_SAVE_FIG else None
 debug_log_odds_prob_fig = plt.figure(figsize=[15, 10], dpi=500) if DEBUG_SAVE_FIG else None
-Z_MAX_M = 30
+Z_MAX_M = 60
 
 
 def load_data(basedir, date, dataset_number):
@@ -432,15 +432,15 @@ if __name__ == "__main__":
     basedir = '/home/nadav/studies/mapping_and_perception_autonomous_robots/first_project/organized_data'
     date = '2011_09_26'
     # dataset_number = '0093'  # old
-    dataset_number = '0095'  # mine
+    # dataset_number = '0095'  # mine
     # dataset_number = '0015'  # road
-    # dataset_number = '0005'  # video
+    dataset_number = '0005'  # video
 
     result_dir = r'/home/nadav/studies/mapping_and_perception_autonomous_robots/first_project/results'
     cur_date_time = time.strftime("%Y.%m.%d-%H.%M")
 
     start_frame = 0
-    skip_frames = 1  # TODO: in advanced frame number we need to enlarge the y_size,x_size
+    skip_frames = 1
     skip_velo = 20
 
     x_size_m = 500
@@ -450,8 +450,8 @@ if __name__ == "__main__":
     occ_params = {
         'p_hit': 0.7, # default 0.7
         'p_miss': 0.4, # default 0.4
-        'occ_th': 0.9, # default 0.8
-        'free_th': 0.6} # default 0.2 # TODO - change 0.75!!!
+        'occ_th': 0.8, # default 0.8
+        'free_th': 0.2} # default 0.2 # TODO - change 0.5!!!
 
     result_dir_timed = os.path.join(result_dir, f'{cur_date_time}_{dataset_number}_skipvelo_{skip_velo}_{occ_params}')
     print(f'saving to: {result_dir_timed}')

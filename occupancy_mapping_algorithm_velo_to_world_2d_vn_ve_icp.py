@@ -8,6 +8,7 @@ import os
 import json
 import copy
 from frames_to_video import create_video
+from scipy.spatial import cKDTree as KDTree
 
 DEBUG_SAVE_FIG = False
 DEBUG_SHOW = False
@@ -299,10 +300,12 @@ def plot_figure(cur_cam2, cur_occupancy_map, cur_velo_car_coor_m, cur_car_w_coor
     y_axis_size = velo_grid.shape[1]
     plt.imshow(velo_grid, cmap='gray')
     plt.title('Instantaneous Point Cloud')
-    plt.xticks(range(0, x_axis_size+1, int(x_axis_size / 2)),
-               np.round(np.linspace(-x_size_m / 2, x_size_m / 2, len(range(0, x_axis_size+1, int(x_axis_size / 2)))), 2))
-    plt.yticks(range(0, y_axis_size+1, int(y_axis_size / 2)),
-               np.round(np.linspace(-y_size_m / 2, y_size_m / 2, len(range(0, y_axis_size+1, int(x_axis_size / 2)))), 2))
+    plt.xticks(range(0, x_axis_size + 1, int(x_axis_size / 2)),
+               np.round(np.linspace(-x_size_m / 2, x_size_m / 2, len(range(0, x_axis_size + 1, int(x_axis_size / 2)))),
+                        2))
+    plt.yticks(range(0, y_axis_size + 1, int(y_axis_size / 2)),
+               np.round(np.linspace(-y_size_m / 2, y_size_m / 2, len(range(0, y_axis_size + 1, int(x_axis_size / 2)))),
+                        2))
     plt.xlabel('x [m]')
     plt.ylabel('y [m]')
     # plt.show(block=False)
@@ -315,10 +318,12 @@ def plot_figure(cur_cam2, cur_occupancy_map, cur_velo_car_coor_m, cur_car_w_coor
     plt.title('Occupancy Map')
     x_axis_size = cur_occupancy_map.shape[0]
     y_axis_size = cur_occupancy_map.shape[1]
-    plt.xticks(range(0, x_axis_size+1, int(x_axis_size / 2)),
-               np.round(np.linspace(-x_size_m / 2, x_size_m / 2, len(range(0, x_axis_size+1, int(x_axis_size / 2)))), 2))
-    plt.yticks(range(0, y_axis_size+1, int(y_axis_size / 2)),
-               np.round(np.linspace(-y_size_m / 2, y_size_m / 2, len(range(0, y_axis_size+1, int(x_axis_size / 2)))), 2))
+    plt.xticks(range(0, x_axis_size + 1, int(x_axis_size / 2)),
+               np.round(np.linspace(-x_size_m / 2, x_size_m / 2, len(range(0, x_axis_size + 1, int(x_axis_size / 2)))),
+                        2))
+    plt.yticks(range(0, y_axis_size + 1, int(y_axis_size / 2)),
+               np.round(np.linspace(-y_size_m / 2, y_size_m / 2, len(range(0, y_axis_size + 1, int(x_axis_size / 2)))),
+                        2))
     plt.xlabel('x [m]')
     plt.ylabel('y [m]')
 
@@ -334,6 +339,53 @@ def transform_single_velo_point(velo_point, T_velo_imu, T_w_imu, car_coord):
     transformed_velo_point = T_w_imu.dot(transformed_velo_point) + car_coord
     return transformed_velo_point
 
+
+def indxtfixed(index, arrays):
+    T = []
+    for i in index:
+        T.append(arrays[i])
+    return np.asanyarray(T)
+
+
+def apply_icp(fixed_point_cloud, moving_point_cloud):
+    original_moving = moving_point_cloud
+    total_R = np.identity(3)
+    total_t = [0.0, 0.0, 0.0]
+    kd_tree = KDTree(fixed_point_cloud)
+    n = np.size(moving_point_cloud, 0)
+    cur_error = np.inf
+    for i in range(1):  # TODO remove iteration
+        prev_error = cur_error
+        distance, indices = kd_tree.query(moving_point_cloud)
+        cur_error = np.mean(distance ** 2)
+        meu_moving = np.mean(moving_point_cloud, axis=0)
+        meu_fixed = np.mean(fixed_point_cloud[indices], axis=0)
+
+        W = np.dot(np.transpose(moving_point_cloud), fixed_point_cloud[indices]) - n * np.outer(meu_moving, meu_fixed)
+
+        U, S, V = np.linalg.svd(W, full_matrices=False)
+        cur_R = np.dot(V.T, U.T)
+        cur_t = meu_fixed - np.dot(cur_R, meu_moving)
+
+        moving_point_cloud = (cur_R.dot(moving_point_cloud.T)).T
+        moving_point_cloud += cur_t
+        total_R = np.dot(cur_R, total_R)
+        total_t = np.dot(cur_R, total_t) + cur_t
+
+        if False:
+            plt.figure()
+            # plt.subplot(1,2,1)
+            plt.scatter(fixed_point_cloud[:, 0], fixed_point_cloud[:, 1], c='r', marker='x', label='fixed')
+            plt.scatter(moving_point_cloud[:, 0], moving_point_cloud[:, 1], c='b', marker='x', label='moving')
+            plt.scatter(original_moving[:, 0], original_moving[:, 1], c='orange', marker='x', label='original_moving')
+            # plt.subplot(1,2,2)
+            plt.legend()
+            plt.show(block=False)
+
+        if abs(prev_error - cur_error) < 0.0001:
+            break
+
+    return moving_point_cloud
 
 def transform_single_velo_point_identity_and_translation(velo_point, T_velo_imu, T_w_imu, car_coord):
     return velo_point + car_coord
@@ -387,21 +439,22 @@ def create_occupancy_map(basedir, date, dataset_number, x_size_m, y_size_m, reso
     car_w_coordinates_m = [o.T_w_imu.dot(point_imu) + center_offset_m for o in oxts]
     car_w_coordinates_m_arr = np.array(car_w_coordinates_m)
 
-    vn = np.array([o.packet.vn  for o in oxts])
-    ve = np.array([o.packet.ve  for o in oxts])
-    time_diff_sec = np.array([cur.microseconds*1e-6 for cur in np.array(data.timestamps[1::]) - np.array(data.timestamps[:-1:])])
+    vn = np.array([o.packet.vn for o in oxts])
+    ve = np.array([o.packet.ve for o in oxts])
+    time_diff_sec = np.array(
+        [cur.microseconds * 1e-6 for cur in np.array(data.timestamps[1::]) - np.array(data.timestamps[:-1:])])
 
     delta_vn_m = np.multiply(vn[1::], time_diff_sec)
     delta_ve_m = np.multiply(ve[1::], time_diff_sec)
 
     vn_total = np.cumsum(delta_vn_m) + center_offset_m
-    ve_total = np.cumsum(delta_ve_m)+ center_offset_m
+    ve_total = np.cumsum(delta_ve_m) + center_offset_m
 
     car_w_coordinates_m_ve_vn = [np.array([cur_ve, cur_vn]) for cur_ve, cur_vn in zip(ve_total, vn_total)]
-
+    a = 2
     if False:
         plt.figure()
-        plt.scatter(car_w_coordinates_m_arr[:,0], car_w_coordinates_m_arr[:,1], color='orange', label='global pose')
+        plt.scatter(car_w_coordinates_m_arr[:, 0], car_w_coordinates_m_arr[:, 1], color='orange', label='global pose')
         # plt.text(car_w_coordinates_m_arr[0,0], car_w_coordinates_m_arr[0,1], '1')
         # plt.text(car_w_coordinates_m_arr[-1,0], car_w_coordinates_m_arr[-1,1], 'end')
 
@@ -415,12 +468,14 @@ def create_occupancy_map(basedir, date, dataset_number, x_size_m, y_size_m, reso
         plt.ylabel('y [m]')
         plt.title('Global Vs. local vehicle position')
         plt.show(block=False)
-        print(f'Average distance: {np.mean(np.linalg.norm(np.array(car_w_coordinates_m_ve_vn) - car_w_coordinates_m_arr[:-1, 0:2], axis=1))} m')
-
+        print(
+            f'Average distance: {np.mean(np.linalg.norm(np.array(car_w_coordinates_m_ve_vn) - car_w_coordinates_m_arr[:-1, 0:2], axis=1))} m')
 
     accumulate_car_coor_m = []
     results_fig = plt.figure(figsize=[15, 10], dpi=300)
-    for ii, cur_velo_car_coor_m, cur_car_w_coor_m, cur_cam2, cur_oxts in zip(range(len(car_w_coordinates_m_ve_vn)), velo,
+    prev_velo = None
+    for ii, cur_velo_car_coor_m, cur_car_w_coor_m, cur_cam2, cur_oxts in zip(range(len(car_w_coordinates_m_ve_vn)),
+                                                                             velo,
                                                                              car_w_coordinates_m_ve_vn, cam2, oxts):
         if ii < start_frame:
             continue
@@ -431,13 +486,25 @@ def create_occupancy_map(basedir, date, dataset_number, x_size_m, y_size_m, reso
         }
         cur_velo_car_coor_m = cur_velo_car_coor_m[::skip_velo]
         cur_clipped_velo_car_coor_m = clip_far_velo_points(cur_velo_car_coor_m)
-
         if False:
             plt.figure()
-            plt.scatter(cur_velo_car_coor_m[:,0], cur_velo_car_coor_m[:,1])
-            plt.scatter(cur_clipped_velo_car_coor_m[:,0], cur_clipped_velo_car_coor_m[:,1])
+            plt.scatter(cur_velo_car_coor_m[:, 0], cur_velo_car_coor_m[:, 1])
+            plt.scatter(cur_clipped_velo_car_coor_m[:, 0], cur_clipped_velo_car_coor_m[:, 1])
+            plt.axis('equal')
+            plt.show(block=False)
+
+        if prev_velo is None:
+            prev_velo = cur_clipped_velo_car_coor_m
+        else:
+            cur_clipped_velo_car_coor_m = apply_icp(prev_velo[:,0:3], cur_clipped_velo_car_coor_m[:,0:3])
+            cur_clipped_velo_car_coor_m = np.c_[cur_clipped_velo_car_coor_m, np.ones(len(cur_clipped_velo_car_coor_m))]
+            prev_velo = cur_clipped_velo_car_coor_m
+
+
 
         cur_clipped_velo_car_coor_m = rotate_velo_by_yaw(cur_clipped_velo_car_coor_m, cur_oxts.packet.yaw)
+
+        a = 3
 
         if False:
             plt.figure()
@@ -470,9 +537,9 @@ if __name__ == "__main__":
     basedir = '/home/nadav/studies/mapping_and_perception_autonomous_robots/first_project/organized_data'
     date = '2011_09_26'
     # dataset_number = '0093'  # old
-    # dataset_number = '0095'  # mine
+    dataset_number = '0095'  # mine
     # dataset_number = '0015'  # road
-    dataset_number = '0005'  # video
+    # dataset_number = '0005'  # video
 
     result_dir = r'/home/nadav/studies/mapping_and_perception_autonomous_robots/first_project/results'
     cur_date_time = time.strftime("%Y.%m.%d-%H.%M")
@@ -486,12 +553,13 @@ if __name__ == "__main__":
     resolution_cell_m = 20 * 1e-2
 
     occ_params = {
-        'p_hit': 0.7, # default 0.7
-        'p_miss': 0.4, # default 0.4
-        'occ_th': 0.8, # default 0.8
-        'free_th': 0.2} # default 0.2
+        'p_hit': 0.7,  # default 0.7
+        'p_miss': 0.4,  # default 0.4
+        'occ_th': 0.8,  # default 0.8
+        'free_th': 0.2}  # default 0.2
 
-    result_dir_timed = os.path.join(result_dir, f'{cur_date_time}_{dataset_number}_skipvelo_{skip_velo}_{occ_params}_ve_vn')
+    result_dir_timed = os.path.join(result_dir,
+                                    f'{cur_date_time}_{dataset_number}_skipvelo_{skip_velo}_{occ_params}_ve_vn_icp')
     print(f'saving to: {result_dir_timed}')
     os.makedirs(result_dir_timed, exist_ok=True)
     create_occupancy_map(basedir, date, dataset_number, x_size_m, y_size_m, resolution_cell_m, skip_frames, skip_velo,
